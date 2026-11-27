@@ -12372,11 +12372,6 @@ state.activeWord.el.classList.remove('is-synced');
 state.activeWord = wordEntry || null;
 if (wordEntry && wordEntry.el) {
 wordEntry.el.classList.add('is-synced');
-if (scrollTarget === 'right') {
-scrollElementIfOutside(dom.previewScroll, wordEntry.el);
-} else if (scrollTarget === 'left') {
-scrollTextareaToOffset(wordEntry.srcStart);
-}
 dom.syncWordPair.textContent = wordEntry.srcText + ' → ' + wordEntry.mlText;
 if (state.traceOpen) updateRuleTrace(wordEntry.srcText);
 } else {
@@ -12385,23 +12380,50 @@ if (state.traceOpen) updateRuleTrace('');
 }
 updateInlineTraceButton();
 renderSourceBackdrop();
+if (wordEntry && wordEntry.el) {
+if (scrollTarget === 'right') {
+scrollElementIfOutside(dom.previewScroll, wordEntry.el);
+} else if (scrollTarget === 'left') {
+scrollTextareaToOffset(wordEntry.srcStart);
+}
+}
 }
 function scrollElementIfOutside(scrollContainer, targetEl) {
 const cRect = scrollContainer.getBoundingClientRect();
 const tRect = targetEl.getBoundingClientRect();
-if (tRect.top < cRect.top + 16 || tRect.bottom > cRect.bottom - 16) {
-targetEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+const viewHeight = scrollContainer.clientHeight;
+if (viewHeight <= 0) return;
+const margin = Math.min(18, Math.max(8, viewHeight * 0.14));
+if (tRect.top < cRect.top + margin || tRect.bottom > cRect.bottom - margin) {
+const contentTop = (tRect.top - cRect.top) + scrollContainer.scrollTop;
+const contentCenter = contentTop + (tRect.height / 2);
+scrollContainer.scrollTop = Math.max(0, Math.round(contentCenter - viewHeight * 0.42));
 }
 }
 function scrollTextareaToOffset(srcOffset) {
-const before = dom.sourceEditor.value.slice(0, srcOffset);
-const lineIdx = before.split('\n').length - 1;
-const linePx = 25.2; // 15px * 1.68 exact line-height
-const targetTop = lineIdx * linePx;
 const viewTop = dom.sourceEditor.scrollTop;
 const viewHeight = dom.sourceEditor.clientHeight;
-if (targetTop < viewTop + 24 || targetTop > viewTop + viewHeight - 40) {
-dom.sourceEditor.scrollTop = Math.max(0, targetTop - viewHeight * 0.35);
+if (viewHeight <= 0) return;
+const margin = Math.min(20, Math.max(8, viewHeight * 0.15));
+const syncEl = dom.sourceBackdrop.querySelector('.src-word-sync');
+if (syncEl) {
+const bdRect = dom.sourceBackdrop.getBoundingClientRect();
+const elRect = syncEl.getBoundingClientRect();
+const contentTop = (elRect.top - bdRect.top) + dom.sourceBackdrop.scrollTop;
+const contentBottom = (elRect.bottom - bdRect.top) + dom.sourceBackdrop.scrollTop;
+if (contentTop < viewTop + margin || contentBottom > viewTop + viewHeight - margin) {
+const center = (contentTop + contentBottom) / 2;
+dom.sourceEditor.scrollTop = Math.max(0, Math.round(center - viewHeight * 0.42));
+syncLeftScroll();
+}
+return;
+}
+const before = dom.sourceEditor.value.slice(0, srcOffset);
+const lineIdx = before.split('\n').length - 1;
+const computedLh = parseFloat(getComputedStyle(dom.sourceEditor).lineHeight) || 25.2;
+const targetTop = lineIdx * computedLh;
+if (targetTop < viewTop + margin || targetTop > viewTop + viewHeight - margin) {
+dom.sourceEditor.scrollTop = Math.max(0, Math.round(targetTop - viewHeight * 0.42));
 syncLeftScroll();
 }
 }
@@ -12427,15 +12449,21 @@ cur = cur.parentElement;
 }
 return null;
 }
-function syncSelectionFromRight() {
+function syncSelectionFromRight(evt, skipIfSameWord) {
 if (!state.renderState) return;
+let wordEl = evt && evt.target ? findWordElementFromNode(evt.target) : null;
+if (!wordEl) {
 const sel = window.getSelection();
-if (!sel || sel.rangeCount === 0) return;
-const wordEl = findWordElementFromNode(sel.anchorNode);
+if (sel && sel.rangeCount > 0) {
+wordEl = findWordElementFromNode(sel.anchorNode);
+}
+}
 if (!wordEl) return;
 const wid = parseInt(wordEl.getAttribute('data-wid'), 10);
 const entry = state.renderState.wordIndex[wid];
-if (entry) setActiveSyncedWord(entry, 'left');
+if (!entry) return;
+if (skipIfSameWord && entry === state.activeWord) return;
+setActiveSyncedWord(entry, 'left');
 }
 function captureLogicalCaretInBlock(blockEl) {
 const sel = window.getSelection();
@@ -15346,8 +15374,12 @@ const kbOpen = shrunkBy > 110 || (editorFocused && shrunkBy > 60);
 rootEl.style.setProperty('--app-vh', vh + 'px');
 rootEl.style.setProperty('--app-vtop', vtop + 'px');
 rootEl.classList.toggle('is-kb-open', kbOpen);
-if (kbOpen && active === dom.sourceEditor && state.activeWord && state.activeWord.el) {
+if (kbOpen && state.activeWord) {
+if (active === dom.sourceEditor && state.activeWord.el) {
 scrollElementIfOutside(dom.previewScroll, state.activeWord.el);
+} else if (active === dom.mlPreview) {
+scrollTextareaToOffset(state.activeWord.srcStart);
+}
 }
 }
 function wireMobileViewport() {
@@ -15470,10 +15502,18 @@ handleRightPaneInput();
 dom.mlPreview.addEventListener('beforeinput', handleRightPaneBeforeInput);
 dom.mlPreview.addEventListener('input', handleRightPaneInput);
 dom.mlPreview.addEventListener('paste', handleRightPanePaste);
-dom.mlPreview.addEventListener('click', syncSelectionFromRight);
+dom.mlPreview.addEventListener('click', function (evt) {
+syncSelectionFromRight(evt, false);
+});
 dom.mlPreview.addEventListener('keyup', function (evt) {
 if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(evt.key)) {
-syncSelectionFromRight();
+syncSelectionFromRight(null, false);
+}
+});
+document.addEventListener('selectionchange', function () {
+if (state.syncLock !== 'idle' || state.isComposing) return;
+if (document.activeElement === dom.mlPreview) {
+syncSelectionFromRight(null, true);
 }
 });
 dom.previewScroll.addEventListener('scroll', function () {
